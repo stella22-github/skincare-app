@@ -3,7 +3,7 @@ import streamlit as st
 from analyzer import process_image, analyze_ingredients, fetch_image_via_gemini
 from database import init_db, save_product, get_all_products, delete_product
 from conflict_checker import check_skincare_conflicts
-from image_fetcher import fetch_product_image_url
+#from image_fetcher import fetch_product_image_url
 
 # 預設高品質保養品示意圖 (備援機制)
 DEFAULT_IMAGE_URL = "https://images.unsplash.com/photo-1556228720-195a672e8a03?q=80&w=800&auto=format&fit=crop"
@@ -306,11 +306,11 @@ with tab1:
                                 print(f"[GeminiSearch Error] {e}")
 
                         # 2. 若 Gemini 沒找到，回退使用 image_fetcher 網路搜尋
-                        if not img_url:
-                            try:
-                                img_url = fetch_product_image_url(clean_name)
-                            except Exception as e:
-                                print(f"[ImageFetcher Error] {e}")
+                        #if not img_url:
+                         #   try:
+                          #      img_url = fetch_product_image_url(clean_name)
+                           # except Exception as e:
+                            #    print(f"[ImageFetcher Error] {e}")
 
                         # 3. 兩者皆無結果時，使用高品質預設示意圖
                         if not img_url:
