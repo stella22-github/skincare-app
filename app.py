@@ -3,7 +3,7 @@ import streamlit as st
 from analyzer import process_image, analyze_ingredients, fetch_image_via_gemini
 from database import init_db, save_product, get_all_products, delete_product
 from conflict_checker import check_skincare_conflicts
-from gemini_help import render_gemini_help_sidebar, render_main_page_api_warning
+from gemini_help import render_gemini_help_sidebar, render_main_page_api_warning, render_creator_story
 
 # 預設高品質保養品示意圖 (備援機制)
 DEFAULT_IMAGE_URL = "https://images.unsplash.com/photo-1556228720-195a672e8a03?q=80&w=800&auto=format&fit=crop"
@@ -155,9 +155,18 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🧴 護膚營養標籤與個人保養品櫃")
+st.markdown(
+    "<p style='color: #a0a0a0; font-size: 16px; margin-top: -10px; margin-bottom: 25px;'>"
+    "每次去藥妝店總是看得眼花撩亂？用成分科學幫妳精準避雷，打造專屬的無瑕肌保養清單 ✨"
+    "</p>", 
+    unsafe_allow_html=True
+)
 
 # 側邊欄使用 gemini_help 提供的 API Key 輸入與免費申請教學
 api_key = render_gemini_help_sidebar()
+
+ # 加上創作者的心路歷程
+render_creator_story()
 
 model_choice = st.sidebar.selectbox(
     "選擇模型",
@@ -386,9 +395,12 @@ with tab2:
                     # 替代原本側邊欄的輸入與教學
                     api_key = render_gemini_help_sidebar()
 
+
                     # 在主畫面判斷，如果沒有 api_key 就顯示警告
                     if not api_key:
                         render_main_page_api_warning()
                     else:
                         # 妳原本的相片上傳與成分分析主程式邏輯...
                         pass
+
+                   
