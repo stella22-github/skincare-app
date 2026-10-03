@@ -3,7 +3,7 @@ import streamlit as st
 from analyzer import process_image, analyze_ingredients, fetch_image_via_gemini
 from database import init_db, save_product, get_all_products, delete_product
 from conflict_checker import check_skincare_conflicts
-#from image_fetcher import fetch_product_image_url
+from gemini_help import render_gemini_help_sidebar, render_main_page_api_warning
 
 # 預設高品質保養品示意圖 (備援機制)
 DEFAULT_IMAGE_URL = "https://images.unsplash.com/photo-1556228720-195a672e8a03?q=80&w=800&auto=format&fit=crop"
@@ -156,10 +156,8 @@ st.markdown("""
 
 st.title("🧴 護膚營養標籤與個人保養品櫃")
 
-# 側邊欄 API Key 與模型選擇
-api_key = st.sidebar.text_input(
-    "請輸入 Gemini API Key", type="password", help="可在 Google AI Studio 免費申請"
-)
+# 側邊欄使用 gemini_help 提供的 API Key 輸入與免費申請教學
+api_key = render_gemini_help_sidebar()
 
 model_choice = st.sidebar.selectbox(
     "選擇模型",
@@ -306,11 +304,11 @@ with tab1:
                                 print(f"[GeminiSearch Error] {e}")
 
                         # 2. 若 Gemini 沒找到，回退使用 image_fetcher 網路搜尋
-                        #if not img_url:
-                         #   try:
-                          #      img_url = fetch_product_image_url(clean_name)
-                           # except Exception as e:
-                            #    print(f"[ImageFetcher Error] {e}")
+                       # if not img_url:
+                        #    try:
+                         #       img_url = fetch_product_image_url(clean_name)
+                          #  except Exception as e:
+                           #     print(f"[ImageFetcher Error] {e}")
 
                         # 3. 兩者皆無結果時，使用高品質預設示意圖
                         if not img_url:
@@ -384,3 +382,13 @@ with tab2:
                 if st.button(f"🗑️ 刪除此紀錄", key=f"del_{p_id}"):
                     delete_product(p_id)
                     st.rerun()
+
+                    # 替代原本側邊欄的輸入與教學
+                    api_key = render_gemini_help_sidebar()
+
+                    # 在主畫面判斷，如果沒有 api_key 就顯示警告
+                    if not api_key:
+                        render_main_page_api_warning()
+                    else:
+                        # 妳原本的相片上傳與成分分析主程式邏輯...
+                        pass
