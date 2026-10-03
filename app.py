@@ -3,7 +3,7 @@ import streamlit as st
 from analyzer import process_image, analyze_ingredients, fetch_image_via_gemini
 from database import init_db, save_product, get_all_products, delete_product
 from conflict_checker import check_skincare_conflicts
-from gemini_help import render_gemini_help_sidebar, render_main_page_api_warning, render_creator_story
+from gemini_help import render_gemini_help_sidebar, render_creator_story
 
 # 預設高品質保養品示意圖 (備援機制)
 DEFAULT_IMAGE_URL = "https://images.unsplash.com/photo-1556228720-195a672e8a03?q=80&w=800&auto=format&fit=crop"
