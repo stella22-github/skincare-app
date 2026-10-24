@@ -30,13 +30,19 @@ st.set_page_config(page_title="護膚營養標籤分析器", layout="centered")
 
 
 # ==========================================
-# 背景 IP 每日 5 次限流機制
+# 背景 IP 每日 5 次限流機制 (已優化大小寫與真實 IP 抓取)
 # ==========================================
 def get_remote_ip():
   try:
     headers = st.context.headers
-    if "X-Forwarded-For" in headers:
-      return headers["X-Forwarded-For"].split(",")[0].strip()
+    # 將所有 header 的 key 統一轉為小寫，徹底解決大小寫抓不到的問題
+    lower_headers = {k.lower(): v for k, v in headers.items()}
+
+    if "x-forwarded-for" in lower_headers:
+      return lower_headers["x-forwarded-for"].split(",")[0].strip()
+    elif "x-real-ip" in lower_headers:
+      return lower_headers["x-real-ip"].strip()
+
     return "127.0.0.1"
   except Exception:
     return "127.0.0.1"
