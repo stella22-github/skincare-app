@@ -63,7 +63,7 @@ def init_rate_limit_db():
   conn.close()
 
 
-def check_and_increment_usage(ip, max_limit=5):
+def check_and_increment_usage(ip, max_limit=15):
   today = str(date.today())
   conn = sqlite3.connect("usage_limit.db")
   c = conn.cursor()
