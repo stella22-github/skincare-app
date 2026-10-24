@@ -374,7 +374,7 @@ with tab1:
   # 顯示今日 IP 剩餘次數狀態
   user_ip = get_remote_ip()
   today_used = get_current_usage(user_ip)
-  MAX_FREE_CALLS = 5
+  MAX_FREE_CALLS = 15
   remaining = max(0, MAX_FREE_CALLS - today_used)
   st.markdown(f"🎁 **今日免費體驗額度**：`{remaining} / {MAX_FREE_CALLS}` 次")
 
