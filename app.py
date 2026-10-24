@@ -1,20 +1,109 @@
+from datetime import date
 import json
-import streamlit as st
-from analyzer import process_image, analyze_ingredients, fetch_image_via_gemini
-from database import init_db, save_product, get_all_products, delete_product
+from analyzer import (
+    analyze_ingredients,
+    fetch_image_via_gemini,
+    process_image,
+)
 from conflict_checker import check_skincare_conflicts
-from gemini_help import render_gemini_help_sidebar, render_creator_story
+from database import (
+    delete_product,
+    get_all_products,
+    init_db,
+    save_product,
+)
+from gemini_help import (
+    render_creator_story,
+)  # 已經把 render_gemini_help_sidebar 拿掉了！
+import sqlite3
+import streamlit as st
 
 # 預設高品質保養品示意圖 (備援機制)
-DEFAULT_IMAGE_URL = "https://images.unsplash.com/photo-1556228720-195a672e8a03?q=80&w=800&auto=format&fit=crop"
+DEFAULT_IMAGE_URL = (
+    "https://images.unsplash.com/photo-1556228720-195a672e8a03?q=80&w=800&auto=format&fit=crop"
+)
 
 # 初始化資料庫
 init_db()
 
 st.set_page_config(page_title="護膚營養標籤分析器", layout="centered")
 
+
+# ==========================================
+# 背景 IP 每日 5 次限流機制
+# ==========================================
+def get_remote_ip():
+  try:
+    headers = st.context.headers
+    if "X-Forwarded-For" in headers:
+      return headers["X-Forwarded-For"].split(",")[0].strip()
+    return "127.0.0.1"
+  except Exception:
+    return "127.0.0.1"
+
+
+def init_rate_limit_db():
+  conn = sqlite3.connect("usage_limit.db")
+  c = conn.cursor()
+  c.execute("""
+        CREATE TABLE IF NOT EXISTS usage_logs (
+            ip TEXT,
+            use_date TEXT,
+            count INTEGER,
+            PRIMARY KEY (ip, use_date)
+        )
+    """)
+  conn.commit()
+  conn.close()
+
+
+def check_and_increment_usage(ip, max_limit=5):
+  today = str(date.today())
+  conn = sqlite3.connect("usage_limit.db")
+  c = conn.cursor()
+  c.execute(
+      "SELECT count FROM usage_logs WHERE ip = ? AND use_date = ?", (ip, today)
+  )
+  row = c.fetchone()
+
+  if row is None:
+    c.execute("INSERT INTO usage_logs VALUES (?, ?, 1)", (ip, today))
+    conn.commit()
+    conn.close()
+    return True, 1
+  else:
+    current_count = row[0]
+    if current_count >= max_limit:
+      conn.close()
+      return False, current_count
+    else:
+      c.execute(
+          "UPDATE usage_logs SET count = count + 1 WHERE ip = ? AND use_date = ?",
+          (ip, today),
+      )
+      conn.commit()
+      conn.close()
+      return True, current_count + 1
+
+
+def get_current_usage(ip):
+  today = str(date.today())
+  conn = sqlite3.connect("usage_limit.db")
+  c = conn.cursor()
+  c.execute(
+      "SELECT count FROM usage_logs WHERE ip = ? AND use_date = ?", (ip, today)
+  )
+  row = c.fetchone()
+  conn.close()
+  return row[0] if row else 0
+
+
+init_rate_limit_db()
+
+
 # --- CSS 樣式定義 ---
-st.markdown("""
+st.markdown(
+    """
 <style>
     .nutrition-label {
         border: 3px solid #111;
@@ -152,26 +241,34 @@ st.markdown("""
         color: #e65100;
     }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 st.title("🧴 護膚營養標籤與個人保養品櫃")
 st.markdown(
     "<p style='color: #a0a0a0; font-size: 16px; margin-top: -10px; margin-bottom: 25px;'>"
     "每次去藥妝店總是看得眼花撩亂？用成分科學幫妳精準避雷，打造專屬的無瑕肌保養清單 ✨"
-    "</p>", 
-    unsafe_allow_html=True
+    "</p>",
+    unsafe_allow_html=True,
 )
 
-# 側邊欄使用 gemini_help 提供的 API Key 輸入與免費申請教學
-api_key = render_gemini_help_sidebar()
+# -----------------------------------------
+# 自動從後台 Secrets 讀取 API Key（完全不需要使用者手動輸入）
+# -----------------------------------------
+try:
+  api_key = st.secrets.get("GEMINI_API_KEY", "")
+except Exception:
+  api_key = ""
 
- # 加上創作者的心路歷程
-render_creator_story()
+# 側邊欄：只保留創作者故事與模型選擇，徹底拿掉 API Key 輸入框
+with st.sidebar:
+  render_creator_story()
 
 model_choice = st.sidebar.selectbox(
     "選擇模型",
     ["gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.8-flash"],
-    index=0
+    index=0,
 )
 
 # 使用 Streamlit Tab 切換分頁
@@ -180,16 +277,19 @@ tab1, tab2 = st.tabs(["🔍 拍照分析成分", "🗄️ 我的保養品櫃 (�
 
 # 通用的成分結果渲染函式
 def render_analysis_result(data, product_name=None, image_url=None):
-    if product_name:
-        st.subheader(f"📌 產品名稱：{product_name}")
-    
-    # 若有圖片 URL，則展示商品外觀照
-    if image_url:
-        st.image(image_url, caption="商品外觀包裝", width=250)
+  if product_name:
+    st.subheader(f"📌 產品名稱：{product_name}")
 
-    tags_html = "".join([f'<span class="smart-tag">{tag}</span>' for tag in data.get("product_type_tags", [])])
-    
-    st.markdown(f"""
+  if image_url:
+    st.image(image_url, caption="商品外觀包裝", width=250)
+
+  tags_html = "".join([
+      f'<span class="smart-tag">{tag}</span>'
+      for tag in data.get("product_type_tags", [])
+  ])
+
+  st.markdown(
+      f"""
     <div class="nutrition-label">
         <div class="nutrition-header">
             <div class="nutrition-title">SKINCARE NUTRITION FACTS</div>
@@ -199,208 +299,264 @@ def render_analysis_result(data, product_name=None, image_url=None):
             {tags_html}
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+      unsafe_allow_html=True,
+  )
 
-    top10_list = data.get("top_10_ingredients", [])
-    if top10_list:
-        items_html = "".join([
-            f'<div class="top10-item"><span class="top10-rank">#{i+1}</span>{ing}</div>'
-            for i, ing in enumerate(top10_list)
-        ])
-        st.markdown(f"""
+  top10_list = data.get("top_10_ingredients", [])
+  if top10_list:
+    items_html = "".join([
+        f'<div class="top10-item"><span class="top10-rank">#{i+1}</span>{ing}</div>'
+        for i, ing in enumerate(top10_list)
+    ])
+    st.markdown(
+        f"""
         <div class="top10-box">
             <div class="top10-title">👑 前 10 大高濃度基底成分 (按配方比例高低排序)</div>
             <div>{items_html}</div>
         </div>
-        """, unsafe_allow_html=True)
+        """,
+        unsafe_allow_html=True,
+    )
 
-    raw_table = data.get("ingredients_grouped", [])
-    if raw_table:
-        for item in raw_table:
-            if isinstance(item, dict):
-                cat = item.get("category", "")
-                ings = item.get("ingredients", "")
-                ings_formatted = ings.replace("[TOP 10]", '<span class="top-badge">TOP 10 高濃度</span>')
-                good = item.get("good", "")
-                bad = item.get("bad_note", "")
-                
-                st.markdown(f"""
+  raw_table = data.get("ingredients_grouped", [])
+  if raw_table:
+    for item in raw_table:
+      if isinstance(item, dict):
+        cat = item.get("category", "")
+        ings = item.get("ingredients", "")
+        ings_formatted = ings.replace(
+            "[TOP 10]", '<span class="top-badge">TOP 10 高濃度</span>'
+        )
+        good = item.get("good", "")
+        bad = item.get("bad_note", "")
+
+        st.markdown(
+            f"""
                 <div class="ing-card">
                     <div class="ing-cat">📂 {cat}</div>
                     <div class="ing-names"><strong>主要成分：</strong><br>{ings_formatted}</div>
                     <div class="ing-good"><strong>💡 作用與優點：</strong><br>{good}</div>
                     <div class="ing-bad"><strong>⚠️ 潛在顧慮：</strong><br>{bad}</div>
                 </div>
-                """, unsafe_allow_html=True)
+                """,
+            unsafe_allow_html=True,
+        )
 
-    st.markdown("<br>", unsafe_allow_html=True)
+  st.markdown("<br>", unsafe_allow_html=True)
 
-    st.markdown(f"""
+  st.markdown(
+      f"""
     <div class="pros-box">
         <strong>💡 核心優勢 (Pros)：</strong><br>{data.get('summary_pros', '')}
     </div>
     <div class="cons-box">
         <strong>⚠️ 避坑提示 (Cons)：</strong><br>{data.get('summary_cons', '')}
     </div>
-    """, unsafe_allow_html=True)
+    """,
+      unsafe_allow_html=True,
+  )
 
 
 # ==================== TAB 1: 拍照分析成分 ====================
 with tab1:
-    uploaded_file = st.file_uploader(
-        "拍下或上傳瓶身背後全英文成分表 (INCI List)",
-        type=["jpg", "png", "jpeg", "heic"],
+  uploaded_file = st.file_uploader(
+      "拍下或上傳瓶身背後全英文成分表 (INCI List)",
+      type=["jpg", "png", "jpeg", "heic"],
+  )
+
+  # 顯示今日 IP 剩餘次數狀態
+  user_ip = get_remote_ip()
+  today_used = get_current_usage(user_ip)
+  MAX_FREE_CALLS = 5
+  remaining = max(0, MAX_FREE_CALLS - today_used)
+  st.markdown(f"🎁 **今日免費體驗額度**：`{remaining} / {MAX_FREE_CALLS}` 次")
+
+  image = None
+  if uploaded_file:
+    if not api_key:
+      st.error(
+          "⚠️ 系統尚未設定 API Key，請檢查 `.streamlit/secrets.toml` 設定！"
+      )
+    else:
+      try:
+        image = process_image(uploaded_file)
+        st.image(image, caption="已上傳的照片（背面成分表）", width="stretch")
+      except Exception as img_err:
+        st.error(f"⚠️ 圖片讀取失敗：{img_err}")
+        st.stop()
+
+      if st.button("🚀 開始分析成分", type="primary"):
+        allowed, current_count = check_and_increment_usage(
+            user_ip, max_limit=MAX_FREE_CALLS
+        )
+
+        if not allowed:
+          st.error(
+              "⚠️ 您今天的免費體驗額度 (5次) 已用完！\n\n明天再來試試看喔！"
+          )
+        else:
+          with st.spinner("AI 配方師連線分析中..."):
+            try:
+              res_json = analyze_ingredients(
+                  image, api_key, model_name=model_choice
+              )
+              st.session_state["current_analysis"] = res_json
+              st.toast(
+                  f"🎉 分析成功！今日已使用 {current_count}/{MAX_FREE_CALLS}"
+                  " 次免費額度"
+              )
+            except Exception as e:
+              st.error(f"分析失敗，詳細錯誤訊息如下：\n\n{e}")
+
+  # 呈現分析結果與儲存區域
+  if "current_analysis" in st.session_state:
+    st.divider()
+    data = st.session_state["current_analysis"]
+
+    render_analysis_result(data)
+
+    # ---------------- 智慧成分衝突檢測 ----------------
+    all_cabinet = get_all_products()
+    conflicts = check_skincare_conflicts(
+        data, all_cabinet, current_prod_name="這款新產品"
     )
 
-    if uploaded_file and api_key:
-        try:
-            image = process_image(uploaded_file)
-            st.image(image, caption="已上傳的照片（背面成分表）", width="stretch")
-        except Exception as img_err:
-            st.error(f"⚠️ 圖片讀取失敗：{img_err}")
-            st.stop()
+    if conflicts:
+      st.markdown("### 🛑 智慧護膚疊擦與成分衝突提醒")
+      for c in conflicts:
+        if c["level"] == "error":
+          st.error(f"### {c['title']}\n{c['msg']}")
+        elif c["level"] == "warning":
+          st.warning(f"### {c['title']}\n{c['msg']}")
+        else:
+          st.info(f"### {c['title']}\n{c['msg']}")
 
-        if st.button("🚀 開始分析成分", type="primary"):
-            with st.spinner("AI 配方師連線分析中..."):
-                try:
-                    res_json = analyze_ingredients(image, api_key, model_name=model_choice)
-                    st.session_state["current_analysis"] = res_json
-                except Exception as e:
-                    st.error(f"分析失敗，詳細錯誤訊息如下：\n\n{e}")
+    # ---------------- 存檔專區 ----------------
+    st.success(
+        "🎉 分析完成！輸入產品完整名稱後，系統將自動搜尋商品正面包裝圖並存檔。"
+    )
+    with st.form("save_form"):
+      prod_name = st.text_input(
+          "產品名稱 (例如：Cetaphil Healthy Renew Face Serum)", value=""
+      )
+      prod_cat = st.selectbox(
+          "主要功效分類",
+          [
+              "美白亮膚",
+              "抗老緊緻",
+              "修護屏障",
+              "保濕鎖水",
+              "防曬隔離",
+              "控油抗痘",
+              "其他",
+          ],
+          index=0,
+      )
 
-    elif not api_key:
-        st.warning("👈 請先在左側邊欄輸入你的 Gemini API Key！")
+      submit_save = st.form_submit_button(
+          "💾 存入我的保養品櫃 (自動抓取外觀圖)"
+      )
+      if submit_save:
+        if prod_name.strip():
+          clean_name = prod_name.strip()
+          img_url = None
 
-    # 呈現分析結果與儲存區域
-    if "current_analysis" in st.session_state:
-        st.divider()
-        data = st.session_state["current_analysis"]
-        
-        render_analysis_result(data)
+          with st.spinner("正在搜尋商品正面包裝照..."):
+            if api_key:
+              try:
+                img_url = fetch_image_via_gemini(clean_name, api_key)
+              except Exception as e:
+                print(f"[GeminiSearch Error] {e}")
 
-        # ---------------- 智慧成分衝突檢測 ----------------
-        all_cabinet = get_all_products()
-        conflicts = check_skincare_conflicts(data, all_cabinet, current_prod_name="這款新產品")
-        
-        if conflicts:
-            st.markdown("### 🛑 智慧護膚疊擦與成分衝突提醒")
-            for c in conflicts:
-                if c["level"] == "error":
-                    st.error(f"### {c['title']}\n{c['msg']}")
-                elif c["level"] == "warning":
-                    st.warning(f"### {c['title']}\n{c['msg']}")
-                else:
-                    st.info(f"### {c['title']}\n{c['msg']}")
+            if not img_url:
+              img_url = DEFAULT_IMAGE_URL
 
-        # ---------------- 存檔專區 ----------------
-        st.success("🎉 分析完成！輸入產品完整名稱後，系統將自動搜尋商品正面包裝圖並存檔。")
-        with st.form("save_form"):
-            prod_name = st.text_input("產品名稱 (例如：Cetaphil Healthy Renew Face Serum)", value="")
-            prod_cat = st.selectbox("主要功效分類", ["美白亮膚", "抗老緊緻", "修護屏障", "保濕鎖水", "防曬隔離","控油抗痘", "其他"], index=0)
-            
-            submit_save = st.form_submit_button("💾 存入我的保養品櫃 (自動抓取外觀圖)")
-            if submit_save:
-                if prod_name.strip():
-                    clean_name = prod_name.strip()
-                    img_url = None
-
-                    with st.spinner("正在搜尋商品正面包裝照..."):
-                        # 1. 優先透過 Gemini Google Search 檢索產品真實圖片
-                        if api_key:
-                            try:
-                                img_url = fetch_image_via_gemini(clean_name, api_key)
-                            except Exception as e:
-                                print(f"[GeminiSearch Error] {e}")
-
-                        # 2. 若 Gemini 沒找到，回退使用 image_fetcher 網路搜尋
-                       # if not img_url:
-                        #    try:
-                         #       img_url = fetch_product_image_url(clean_name)
-                          #  except Exception as e:
-                           #     print(f"[ImageFetcher Error] {e}")
-
-                        # 3. 兩者皆無結果時，使用高品質預設示意圖
-                        if not img_url:
-                            img_url = DEFAULT_IMAGE_URL
-                        
-                    save_product(
-                        name=clean_name, 
-                        category=prod_cat, 
-                        tags=data.get("product_type_tags", []), 
-                        analysis_data=data,
-                        image_url=img_url
-                    )
-                    st.toast("✅ 成功存入保養品櫃！已自動抓取並綁定商品正面圖片。")
-                    st.rerun()
-                else:
-                    st.error("請輸入產品名稱再存檔！")
+          save_product(
+              name=clean_name,
+              category=prod_cat,
+              tags=data.get("product_type_tags", []),
+              analysis_data=data,
+              image_url=img_url,
+          )
+          st.toast(
+              "✅ 成功存入保養品櫃！已自動抓取並綁定商品正面圖片。"
+          )
+          st.rerun()
+        else:
+          st.error("請輸入產品名稱再存檔！")
 
 
 # ==================== TAB 2: 我的保養品櫃 (歷史紀錄) ====================
 with tab2:
-    st.header("🗄️ 我的護膚品記憶庫")
-    
-    products = get_all_products()
-    if not products:
-        st.info("尚無存檔產品。在「拍照分析成分」頁面分析後即可一鍵存入！")
-    else:
-        # 搜尋與篩選列
-        col_search, col_filter = st.columns([2, 1])
-        with col_search:
-            search_query = st.text_input("🔍 搜尋產品名稱", "")
-        with col_filter:
-            category_filter = st.selectbox("🏷️ 功效篩選", ["全部", "美白亮膚", "抗老緊緻", "修護屏障", "保濕鎖水", "防曬隔離","控油抗痘", "其他"])
+  st.header("🗄️ 我的護膚品記憶庫")
 
-        filtered_products = []
-        for p in products:
-            p_id, p_name, p_cat, p_tags, p_data_str, p_img_url, p_time = p
-            
-            matches_search = search_query.lower() in p_name.lower() if search_query else True
-            matches_cat = (category_filter == "全部") or (p_cat == category_filter)
-            
-            if matches_search and matches_cat:
-                filtered_products.append(p)
+  products = get_all_products()
+  if not products:
+    st.info("尚無存檔產品。在「拍照分析成分」頁面分析後即可一鍵存入！")
+  else:
+    col_search, col_filter = st.columns([2, 1])
+    with col_search:
+      search_query = st.text_input("🔍 搜尋產品名稱", "")
+    with col_filter:
+      category_filter = st.selectbox(
+          "🏷️ 功效篩選",
+          [
+              "全部",
+              "美白亮膚",
+              "抗老緊緻",
+              "修護屏障",
+              "保濕鎖水",
+              "防曬隔離",
+              "控油抗痘",
+              "其他",
+          ],
+      )
 
-        st.caption(f"共找到 {len(filtered_products)} 款保養品")
-        st.divider()
+    filtered_products = []
+    for p in products:
+      p_id, p_name, p_cat, p_tags, p_data_str, p_img_url, p_time = p
 
-        # 展示產品卡片
-        for p in filtered_products:
-            p_id, p_name, p_cat, p_tags, p_data_str, p_img_url, p_time = p
-            try:
-                p_data = json.loads(p_data_str) if isinstance(p_data_str, str) else p_data_str
-            except Exception:
-                p_data = {}
-            
-            with st.expander(f"🧴 【{p_cat}】{p_name}  （存檔時間：{p_time}）"):
-                # 帶入從網路擷取到的圖片 URL 並渲染
-                render_analysis_result(p_data, product_name=p_name, image_url=p_img_url)
-                
-                # 自動比對與保養品櫃內其他產品的搭配建議
-                p_conflicts = check_skincare_conflicts(p_data, products, current_prod_name=p_name)
-                if p_conflicts:
-                    st.markdown("#### 🛑 與櫃子內其他產品的搭配建議：")
-                    for c in p_conflicts:
-                        if c["level"] == "error":
-                            st.error(f"**{c['title']}**\n\n{c['msg']}")
-                        elif c["level"] == "warning":
-                            st.warning(f"**{c['title']}**\n\n{c['msg']}")
-                        else:
-                            st.info(f"**{c['title']}**\n\n{c['msg']}")
+      matches_search = (
+          search_query.lower() in p_name.lower() if search_query else True
+      )
+      matches_cat = (category_filter == "全部") or (p_cat == category_filter)
 
-                if st.button(f"🗑️ 刪除此紀錄", key=f"del_{p_id}"):
-                    delete_product(p_id)
-                    st.rerun()
+      if matches_search and matches_cat:
+        filtered_products.append(p)
 
-                    # 替代原本側邊欄的輸入與教學
-                    api_key = render_gemini_help_sidebar()
+    st.caption(f"共找到 {len(filtered_products)} 款保養品")
+    st.divider()
 
+    for p in filtered_products:
+      p_id, p_name, p_cat, p_tags, p_data_str, p_img_url, p_time = p
+      try:
+        p_data = (
+            json.loads(p_data_str)
+            if isinstance(p_data_str, str)
+            else p_data_str
+        )
+      except Exception:
+        p_data = {}
 
-                    # 在主畫面判斷，如果沒有 api_key 就顯示警告
-                    if not api_key:
-                        render_main_page_api_warning()
-                    else:
-                        # 妳原本的相片上傳與成分分析主程式邏輯...
-                        pass
+      with st.expander(f"🧴 【{p_cat}】{p_name}  （存檔時間：{p_time}）"):
+        render_analysis_result(
+            p_data, product_name=p_name, image_url=p_img_url
+        )
 
-                   
+        p_conflicts = check_skincare_conflicts(
+            p_data, products, current_prod_name=p_name
+        )
+        if p_conflicts:
+          st.markdown("#### 🛑 與櫃子內其他產品的搭配建議：")
+          for c in p_conflicts:
+            if c["level"] == "error":
+              st.error(f"**{c['title']}**\n\n{c['msg']}")
+            elif c["level"] == "warning":
+              st.warning(f"**{c['title']}**\n\n{c['msg']}")
+            else:
+              st.info(f"**{c['title']}**\n\n{c['msg']}")
+
+        if st.button(f"🗑️ 刪除此紀錄", key=f"del_{p_id}"):
+          delete_product(p_id)
+          st.rerun()
