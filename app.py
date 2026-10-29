@@ -63,7 +63,7 @@ def init_rate_limit_db():
   conn.close()
 
 
-def check_and_increment_usage(ip, max_limit=15):
+def check_and_increment_usage(ip, max_limit=5):
   today = str(date.today())
   conn = sqlite3.connect("usage_limit.db")
   c = conn.cursor()
@@ -374,7 +374,7 @@ with tab1:
   # 顯示今日 IP 剩餘次數狀態
   user_ip = get_remote_ip()
   today_used = get_current_usage(user_ip)
-  MAX_FREE_CALLS = 15
+  MAX_FREE_CALLS = 5
   remaining = max(0, MAX_FREE_CALLS - today_used)
   st.markdown(f"🎁 **今日免費體驗額度**：`{remaining} / {MAX_FREE_CALLS}` 次")
 
